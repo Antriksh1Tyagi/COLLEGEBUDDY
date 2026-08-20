@@ -1,4 +1,14 @@
 import streamlit as st
+from utils import preprocess_text
+import pandas as pd
+
+
+
+# -------Dataset load-------
+
+df = pd.read_csv("data/faqs.csv")
+
+st.sidebar.write(f"Total FAQs: {len(df)}")
 
 # ---------------- PAGE CONFIG ----------------
 st.set_page_config(
@@ -166,6 +176,16 @@ elif page == "💬 Chatbot":
     if st.button("🚀 Ask CollegeBuddy"):
 
         if question.strip():
+
+            processed = preprocess_text(question)
+
+            st.success("Text processed successfully!")
+
+            st.write("**Original Question:**")
+            st.write(question)
+
+            st.write("**Processed Text:**")
+            st.code(processed)
 
             st.markdown("""
             <div class="card">
