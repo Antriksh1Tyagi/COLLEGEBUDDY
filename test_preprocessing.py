@@ -9,6 +9,11 @@ from utils import (
 )
 
 
+def test_lemmatization_uses_verb_forms():
+    tokens = ["does", "included", "running", "students"]
+    assert lemmatize_words(tokens) == ["do", "include", "run", "student"]
+
+
 # Load the actual CollegeBuddy FAQ dataset
 
 faq_data = pd.read_csv("data/faq.csv")
@@ -79,3 +84,7 @@ for index in range(number_of_tests):
 print("\n" + "=" * 70)
 print("NLP PREPROCESSING VERIFICATION COMPLETED")
 print("=" * 70)
+
+
+if __name__ == "__main__":
+    pass

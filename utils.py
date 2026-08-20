@@ -3,6 +3,8 @@ import nltk
 
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
+from nltk import pos_tag
+from nltk.corpus import wordnet as wn
 
 
 
@@ -11,30 +13,42 @@ from nltk.stem import WordNetLemmatizer
 
 def setup_nltk():
 
-#Download the NLTK resources required by the project.
-
+    # Download the NLTK resources required by the project.
     resources = [
         ("corpora/stopwords", "stopwords"),
         ("corpora/wordnet", "wordnet"),
         ("tokenizers/punkt", "punkt"),
-        ("tokenizers/punkt_tab", "punkt_tab")
+        ("tokenizers/punkt_tab", "punkt_tab"),
+        ("taggers/averaged_perceptron_tagger_eng", "averaged_perceptron_tagger_eng")
     ]
 
     for path, resource in resources:
         try:
             nltk.data.find(path)
         except LookupError:
-            nltk.download(resource)
+            try:
+                nltk.download(resource, quiet=True)
+            except Exception:
+                pass
 
 
 setup_nltk()
-
 
 
 # NLP TOOLS
 
 STOP_WORDS = set(stopwords.words("english"))
 LEMMATIZER = WordNetLemmatizer()
+
+
+def _as_token_list(tokens):
+    if tokens is None:
+        return []
+    if isinstance(tokens, str):
+        return tokenize_text(tokens)
+    if isinstance(tokens, (list, tuple)):
+        return list(tokens)
+    return []
 
 
 
@@ -91,13 +105,13 @@ def clean_text(text):
 
 def tokenize_text(text):
 
-#Convert text into individual words.
-
+    # Convert text into individual words.
     if not text:
+        return []
+    if not isinstance(text, str):
         return []
 
     return nltk.word_tokenize(text)
-
 
 
 # STOPWORD REMOVAL
@@ -105,32 +119,48 @@ def tokenize_text(text):
 
 def remove_stopwords(tokens):
 
-#Remove common English stopwords.
-
+    # Remove common English stopwords.
+    tokens = _as_token_list(tokens)
     if not tokens:
         return []
 
     return [
         word for word in tokens
-        if word not in STOP_WORDS
+        if word.lower() not in STOP_WORDS
     ]
-
 
 
 # LEMMATIZATION
 
 
+def _wordnet_pos(tag):
+    if tag is None:
+        return wn.NOUN
+    if tag.startswith("J"):
+        return wn.ADJ
+    if tag.startswith("V"):
+        return wn.VERB
+    if tag.startswith("R"):
+        return wn.ADV
+    return wn.NOUN
+
+
 def lemmatize_words(tokens):
 
-#Convert words into their base/dictionary form.
-
+    # Convert words into their base/dictionary form.
+    tokens = _as_token_list(tokens)
     if not tokens:
         return []
 
-    return [
-        LEMMATIZER.lemmatize(word)
-        for word in tokens
-    ]
+    tagged_tokens = pos_tag(tokens)
+
+    lemmatized = []
+    for word, tag in tagged_tokens:
+        word_lower = word.lower()
+        pos = _wordnet_pos(tag)
+        lemmatized.append(LEMMATIZER.lemmatize(word_lower, pos=pos))
+
+    return lemmatized
 
 
 
