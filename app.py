@@ -6,7 +6,7 @@ import pandas as pd
 
 # -------Dataset load-------
 
-df = pd.read_csv("data/faqs.csv")
+df = pd.read_csv("data/faq.csv")
 
 st.sidebar.write(f"Total FAQs: {len(df)}")
 
