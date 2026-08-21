@@ -91,7 +91,7 @@ def clean_text(text):
     text = text.lower()
 
     # Remove numbers, punctuation and special characters
-    text = re.sub(r"[^a-zA-Z\s]", " ", text)
+    text = re.sub(r"[^a-zA-Z0-9\s]", " ", text)
 
     # Remove unnecessary spaces
     text = re.sub(r"\s+", " ", text)
