@@ -1,227 +1,182 @@
 import re
 import nltk
-
-from nltk.corpus import stopwords
+import pandas as pd
+from pathlib import Path
+from nltk.corpus import stopwords, wordnet as wn
 from nltk.stem import WordNetLemmatizer
 from nltk import pos_tag
-from nltk.corpus import wordnet as wn
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
-
-
-# NLTK SETUP
-
-
+# ---------------- NLTK SETUP ----------------
 def setup_nltk():
-
-    # Download the NLTK resources required by the project.
     resources = [
-        ("corpora/stopwords", "stopwords"),
-        ("corpora/wordnet", "wordnet"),
-        ("tokenizers/punkt", "punkt"),
-        ("tokenizers/punkt_tab", "punkt_tab"),
-        ("taggers/averaged_perceptron_tagger_eng", "averaged_perceptron_tagger_eng")
+        ("corpora/stopwords","stopwords"),
+        ("corpora/wordnet","wordnet"),
+        ("tokenizers/punkt","punkt"),
+        ("tokenizers/punkt_tab","punkt_tab"),
+        ("taggers/averaged_perceptron_tagger_eng","averaged_perceptron_tagger_eng"),
     ]
-
-    for path, resource in resources:
+    for path,res in resources:
         try:
             nltk.data.find(path)
         except LookupError:
-            try:
-                nltk.download(resource, quiet=True)
-            except Exception:
-                pass
-
+            try: nltk.download(res, quiet=True)
+            except: pass
 
 setup_nltk()
+STOP_WORDS=set(stopwords.words("english"))
+LEMMATIZER=WordNetLemmatizer()
 
-
-# NLP TOOLS
-
-STOP_WORDS = set(stopwords.words("english"))
-LEMMATIZER = WordNetLemmatizer()
-
-
-def _as_token_list(tokens):
-    if tokens is None:
-        return []
-    if isinstance(tokens, str):
-        return tokenize_text(tokens)
-    if isinstance(tokens, (list, tuple)):
-        return list(tokens)
-    return []
-
-
-
-# INPUT VALIDATION
-
-
+# ---------------- PREPROCESS ----------------
 def validate_input(text):
-#Check whether the input is a valid text string.
-
-    if text is None:
-        return False
-
-    if not isinstance(text, str):
-        return False
-
-    if not text.strip():
-        return False
-
-    return True
-
-
-
-# TEXT CLEANING
-
+    return isinstance(text,str) and text.strip()
 
 def clean_text(text):
-
-
-    """
-    Clean the input text by:
-    1- converting it to lowercase
-    2- removing punctuation
-    3- removing numbers
-    4- removing extra spaces
-    """
-
-    if not validate_input(text):
-        return ""
-
-    text = text.lower()
-
-    # Remove numbers, punctuation and special characters
-    text = re.sub(r"[^a-zA-Z\s]", " ", text)
-
-    # Remove unnecessary spaces
-    text = re.sub(r"\s+", " ", text)
-
-    return text.strip()
-
-
-
-# TOKENIZATION
-
+    if not validate_input(text): return ""
+    text=text.lower()
+    text=re.sub(r"[^a-zA-Z0-9\s]"," ",text)
+    return re.sub(r"\s+"," ",text).strip()
 
 def tokenize_text(text):
-
-    # Convert text into individual words.
-    if not text:
-        return []
-    if not isinstance(text, str):
-        return []
-
-    return nltk.word_tokenize(text)
-
-
-# STOPWORD REMOVAL
-
+    return nltk.word_tokenize(text) if text else []
 
 def remove_stopwords(tokens):
+    return [t for t in tokens if t.lower() not in STOP_WORDS]
 
-    # Remove common English stopwords.
-    tokens = _as_token_list(tokens)
-    if not tokens:
-        return []
-
-    return [
-        word for word in tokens
-        if word.lower() not in STOP_WORDS
-    ]
-
-
-# LEMMATIZATION
-
-
-def _wordnet_pos(tag):
-    if tag is None:
-        return wn.NOUN
-    if tag.startswith("J"):
-        return wn.ADJ
-    if tag.startswith("V"):
-        return wn.VERB
-    if tag.startswith("R"):
-        return wn.ADV
+def _wn(tag):
+    if tag.startswith("J"): return wn.ADJ
+    if tag.startswith("V"): return wn.VERB
+    if tag.startswith("R"): return wn.ADV
     return wn.NOUN
 
-
-def lemmatize_words(tokens):
-
-    # Convert words into their base/dictionary form.
-    tokens = _as_token_list(tokens)
-    if not tokens:
-        return []
-
-    tagged_tokens = pos_tag(tokens)
-
-    lemmatized = []
-    for word, tag in tagged_tokens:
-        word_lower = word.lower()
-        pos = _wordnet_pos(tag)
-        lemmatized.append(LEMMATIZER.lemmatize(word_lower, pos=pos))
-
-    return lemmatized
-
-
-
-# COMPLETE PREPROCESSING PIPELINE
-
-
 def preprocess_text(text):
+    if not validate_input(text): return ""
+    tokens=tokenize_text(clean_text(text))
+    tokens=remove_stopwords(tokens)
+    tagged=pos_tag(tokens)
+    return " ".join(LEMMATIZER.lemmatize(w.lower(),_wn(t)) for w,t in tagged)
 
-    """
-    Complete NLP preprocessing pipeline.
+# ---------------- FAQ RETRIEVAL ----------------
+faq_data=None
+tfidf_vectorizer=None
+faq_vectors=None
 
-    Processing steps:
-    1. Input validation
-    2. Text cleaning
-    3. Tokenization
-    4. Stopword removal
-    5. Lemmatization
+def load_faq_data(file_path=None):
+    global faq_data
+    if file_path is None:
+        data_dir=Path("data")
+        if (data_dir/"faqs.csv").exists():
+            file_path=data_dir/"faqs.csv"
+        else:
+            files=list(data_dir.glob("*.csv"))
+            if not files:
+                raise FileNotFoundError("No CSV found in data folder.")
+            file_path=max(files,key=lambda p:p.stat().st_size)
+    faq_data=pd.read_csv(file_path)
+    for col in ["Question","Answer","Category","Source"]:
+        if col not in faq_data.columns:
+            raise ValueError(f"Missing column: {col}")
+    faq_data["Keywords"]=faq_data.get("Keywords","").fillna("")
+    return faq_data
 
-    Returns:
-        A cleaned string ready for further NLP processing.
-    """
+def create_faq_vectors():
+    global tfidf_vectorizer,faq_vectors,faq_data
 
-    if not validate_input(text):
-        return ""
+    if faq_data is None:
+        load_faq_data()
 
-    cleaned_text = clean_text(text)
+    # faq_data["Search_Text"]=faq_data["Question"].fillna("")+" "+faq_data["Keywords"]
+    faq_data["Search_Text"] = (
+        faq_data["Question"].fillna("") + " "
+        + faq_data["Keywords"].fillna("") + " "
+        + faq_data["Category"].fillna("")
+        )
 
-    tokens = tokenize_text(cleaned_text)
+    faq_data["Processed_Question"]=faq_data["Search_Text"].apply(preprocess_text)
+    tfidf_vectorizer=TfidfVectorizer(lowercase=False)
+    faq_vectors=tfidf_vectorizer.fit_transform(faq_data["Processed_Question"])
+    return faq_vectors
 
-    filtered_tokens = remove_stopwords(tokens)
+def find_best_match(question, threshold=0.60, top_k=3):
+    global faq_data, faq_vectors, tfidf_vectorizer
 
-    lemmatized_tokens = lemmatize_words(filtered_tokens)
+    if not validate_input(question):
+        return {
+            "answer": None,
+            "category": None,
+            "source": None,
+            "similarity": 0.0,
+            "candidates": []
+        }
 
-    return " ".join(lemmatized_tokens)
+    if faq_data is None:
+        load_faq_data()
 
+    if faq_vectors is None:
+        create_faq_vectors()
 
+    processed = preprocess_text(question)
 
-# TESTING
+    if not processed:
+        return {
+            "answer": None,
+            "category": None,
+            "source": None,
+            "similarity": 0.0,
+            "candidates": []
+        }
 
+    query_vector = tfidf_vectorizer.transform([processed])
+    scores = cosine_similarity(query_vector, faq_vectors)[0]
 
-if __name__ == "__main__":
+    # ---------- Keyword Boost ----------
+    query_words = set(processed.split())
 
-    print("=" * 60)
-    print("COLLEGEBUDDY - NLP PREPROCESSING")
-    print("=" * 60)
+    for i, row in faq_data.iterrows():
+        keywords = preprocess_text(str(row.get("Keywords", "")))
+        keyword_set = set(keywords.split())
 
-    sample_questions = [
-        "What are the Hostel Fees?",
-        "What is the minimum attendance requirement?",
-        "How can I apply for admission?",
-        "Does the college provide library facilities?",
-        "When will the semester examinations be conducted?"
-    ]
+        overlap = len(query_words & keyword_set)
 
-    for question in sample_questions:
+        if overlap:
+            scores[i] += overlap * 0.08
 
-        processed_question = preprocess_text(question)
+    # ---------- Top K ----------
+    top_indices = scores.argsort()[::-1][:top_k]
 
-        print("\nOriginal  :", question)
-        print("Processed :", processed_question)
+    candidates = []
 
-    print("\n" + "=" * 60)
-    print("Preprocessing test completed successfully.")
-    print("=" * 60)
+    for idx in top_indices:
+        row = faq_data.iloc[idx]
+        candidates.append({
+            "question": row["Question"],
+            "answer": row["Answer"],
+            "category": row["Category"],
+            "source": row["Source"],
+            "similarity": float(scores[idx])
+        })
+
+    best = candidates[0]
+
+    if best["similarity"] < threshold:
+        return {
+            "answer": None,
+            "category": None,
+            "source": None,
+            "similarity": best["similarity"],
+            "candidates": candidates
+        }
+
+    return {
+        "answer": best["answer"],
+        "category": best["category"],
+        "source": best["source"],
+        "similarity": best["similarity"],
+        "candidates": candidates
+    }
+
+if __name__=="__main__":
+    load_faq_data()
+    create_faq_vectors()
+    print(find_best_match("What is hostel fee?"))
