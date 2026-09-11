@@ -3,7 +3,9 @@ import streamlit as st
 import pandas as pd
 from pathlib import Path
 from textwrap import dedent
-from utils import preprocess_text
+from utils import preprocess_text, find_best_match, load_faq_data
+from gemini_utils import enhance_faq_answer, generate_fallback_answer, select_best_faq
+import base64
 
 # ============================================================
 # PAGE CONFIG
@@ -40,6 +42,16 @@ if "page" not in st.session_state:
 # ============================================================
 def asset(name: str) -> str:
     return str(ASSET_DIR / name)
+
+def asset_exists(name: str) -> bool:
+    return (ASSET_DIR / name).exists()
+
+def asset_b64(name: str):
+    path=ASSET_DIR/name
+    if path.exists():
+        with open(path,'rb') as f:
+            return base64.b64encode(f.read()).decode()
+    return None
 
 def go_to(page: str):
     st.session_state.page = page
@@ -568,6 +580,62 @@ section[data-testid="stSidebar"] .active-nav button {
     .hero h1 {font-size:42px;}
     .feature-row {gap:20px;}
 }
+
+/* ===== Streamlit Buttons ===== */
+
+.stButton > button {
+    background: linear-gradient(135deg, #5B5FF5 0%, #6C63FF 100%);
+    color: white !important;
+    border: none;
+    border-radius: 14px;
+    padding: 0.65rem 1.4rem;
+    font-weight: 600;
+    transition: all 0.25s ease;
+    box-shadow: 0 6px 18px rgba(91,95,245,0.25);
+}
+
+.stButton > button:hover {
+    background: linear-gradient(135deg, #4E54E8 0%, #5B5FF5 100%);
+    color: white !important;
+    transform: translateY(-2px);
+    box-shadow: 0 8px 22px rgba(91,95,245,0.35);
+}
+
+.stButton > button:active {
+    transform: scale(0.98);
+}
+
+/* ===== Status Badges ===== */
+
+.status-badge{
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+    padding:6px 12px;
+    border-radius:999px;
+    font-size:13px;
+    font-weight:600;
+    margin-top:8px;
+}
+
+.status-verified{
+    background:#E8F8EE;
+    color:#18864B;
+    border:1px solid #B8E7C8;
+}
+
+.status-enhanced{
+    background:#EEF2FF;
+    color:#4F46E5;
+    border:1px solid #C7D2FE;
+}
+
+.status-fallback{
+    background:#FFF4E5;
+    color:#C06A00;
+    border:1px solid #FFD8A8;
+}
+
 </style>
 """,
     unsafe_allow_html=True,
@@ -589,6 +657,13 @@ st.markdown(
 # ============================================================
 # SIDEBAR
 # ============================================================
+
+# Load FAQ count safely
+try:
+    faq_count = len(load_faq_data())
+except:
+    faq_count = 0
+
 with st.sidebar:
     st.markdown('<div class="sidebar-inner">', unsafe_allow_html=True)
 
@@ -609,17 +684,20 @@ with st.sidebar:
             '<div class="active-nav">' if active else '<div>',
             unsafe_allow_html=True,
         )
+
         if st.button(f"{icon}    {label}", key=f"nav_{label}", use_container_width=True):
             go_to(label)
+
         st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown(
         f"""
         <div class="sidebar-stat">
             <div class="title">▣ &nbsp; FAQ Dataset</div>
-            <div class="number">{len(df)}</div>
+            <div class="number">{faq_count}</div>
             <div class="sub">Verified FAQs</div>
         </div>
+
         <div class="quote-card">
             <div class="quote">“Ask. Learn.<br>Grow.”</div>
             <div class="by">— CollegeBuddy</div>
@@ -628,7 +706,10 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-    campus_b64 = __import__("base64").b64encode(open(asset("sidebar_campus.png"), "rb").read()).decode()
+    campus_b64 = __import__("base64").b64encode(
+        open(asset("sidebar_campus.png"), "rb").read()
+    ).decode()
+
     st.markdown(
         f'<img class="campus-img" src="data:image/png;base64,{campus_b64}">',
         unsafe_allow_html=True,
@@ -795,7 +876,21 @@ elif st.session_state.page == "Chatbot":
     for message in st.session_state.messages:
         role = message["role"]
         content = message["content"]
-        safe_content = str(content).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+        # safe_content = str(content).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+        if role == "user":
+            # Escape user messages for safety
+            safe_content = (
+                str(content)
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\n", "<br>")
+            )
+        else:
+            # Allow HTML for assistant messages (status badges)
+            safe_content = str(content).replace("\n", "<br>")
+
+
 
         if role == "user":
             st.markdown(
@@ -860,20 +955,56 @@ elif st.session_state.page == "Chatbot":
         st.session_state.messages.append({"role": "user", "content": question})
 
         try:
-            processed_question = preprocess_text(question)
-        except Exception:
-            processed_question = question
+            # ----------------------------
+            # Decide final response
+            # ----------------------------
 
-        # Keep your existing answer logic here.
-        # This UI version does not change utils.py.
-        answer = (
-            "Thank you for your question! 😊\n\n"
-            "I will help you with college-related information."
-        )
+            result = find_best_match(question, threshold=0.60)
+
+            if result.get("candidates"):
+                chosen = select_best_faq(question, result["candidates"])
+            else:
+                chosen = None
+
+            # ----------------------------
+            # Verified FAQ
+            # ----------------------------
+
+            if chosen and chosen["similarity"] >= 0.60:
+
+                improved = enhance_faq_answer(
+                    question,
+                    chosen["answer"],
+                    chosen["source"]
+                )
+
+                answer = (
+                    f"{improved}\n\n"
+                    f"Category: {chosen['category']}\n"
+                    f"Source: {chosen['source']}\n\n"
+                    f"<div class='status-badge status-enhanced'>✨ Verified + AI Enhanced</div>"
+                )
+
+            # ----------------------------
+            # Gemini fallback
+            # ----------------------------
+
+            else:
+
+                fallback = generate_fallback_answer(question)
+
+                answer = (
+                    f"{fallback}\n\n"
+                    f"<div class='status-badge status-fallback'>🤖 AI Fallback</div>"
+                )
+
+
+
+        except Exception as e:
+            answer = "An error occurred while searching the FAQ database.\n\nError: " + str(e)
 
         st.session_state.messages.append({"role": "assistant", "content": answer})
         st.rerun()
-
     if clear:
         clear_chat()
 
